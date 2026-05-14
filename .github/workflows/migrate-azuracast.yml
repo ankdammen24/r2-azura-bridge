@@ -39,6 +39,7 @@ jobs:
     permissions:
       contents: read
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       # AzuraCast
       AZURACAST_BASE_URL: ${{ secrets.AZURACAST_BASE_URL }}
       AZURACAST_API_KEY: ${{ secrets.AZURACAST_API_KEY }}
@@ -56,7 +57,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -90,12 +96,35 @@ jobs:
           echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> "$GITHUB_ENV"
           echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" >> "$GITHUB_ENV"
 
+      - name: Preflight AzuraCast DNS/API
+        run: |
+          host=$(echo "$AZURACAST_BASE_URL" | sed -E 's#^https?://([^/:]+).*#\1#')
+          echo "AzuraCast host: $host"
+          if ! getent hosts "$host" >/dev/null; then
+            echo "✖ DNS lookup failed for $host"
+            printf '{"summary":{"planned":0,"copied":0,"skipped":0,"failed":1},"rows":[{"status":"failed","error_message":"DNS lookup failed for %s"}]}\n' "$host" > migration-report.json
+            echo "source_station,source_id,source_url,original_filename,target_bucket,target_key,content_type,size_bytes,status,error_message" > migration-report.csv
+            printf '"","","","","","","",0,failed,"DNS lookup failed for %s"\n' "$host" >> migration-report.csv
+            exit 1
+          fi
+
+          if ! curl -fsS --connect-timeout 15 --max-time 30 \
+            -H "X-API-Key: $AZURACAST_API_KEY" \
+            -H "Accept: application/json" \
+            "$AZURACAST_BASE_URL/api/stations" >/dev/null; then
+            echo "✖ API probe failed for $AZURACAST_BASE_URL/api/stations"
+            echo '{"summary":{"planned":0,"copied":0,"skipped":0,"failed":1},"rows":[{"status":"failed","error_message":"API probe failed for /api/stations"}]}' > migration-report.json
+            echo "source_station,source_id,source_url,original_filename,target_bucket,target_key,content_type,size_bytes,status,error_message" > migration-report.csv
+            echo '"","","","","","","",0,failed,"API probe failed for /api/stations"' >> migration-report.csv
+            exit 1
+          fi
+
       - name: Run migration
         run: bun run migrate:azuracast
 
       - name: Upload migration report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: migration-report-${{ github.run_id }}
           path: |
