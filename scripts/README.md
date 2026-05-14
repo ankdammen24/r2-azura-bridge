@@ -1,6 +1,6 @@
 # AzuraCast → Cloudflare R2 migration
 
-Standalone, temporary CLI. Runs locally / in CI. Not part of the Radio Core runtime.
+Standalone, temporary CLI. Runs locally / i CI. Inte del av Radio Core-runtime.
 
 ## Buckets used
 
@@ -11,68 +11,64 @@ Standalone, temporary CLI. Runs locally / in CI. Not part of the Radio Core runt
 | artwork (cover from media)  | `radio-core-artwork`    | `azuracast/{station}/artwork/{yyyy-mm-dd}/`  |
 | recordings / archive        | `radio-core-archives`   | `azuracast/{station}/recordings/{yyyy-mm-dd}/` |
 
-`radio-core-import`, `radio-core-public`, `radio-core-stream-cache` are not written by this script (no natural AzuraCast source).
+`radio-core-import`, `radio-core-public`, `radio-core-stream-cache` skrivs inte (ingen naturlig AzuraCast-källa).
 
 ## Env
 
+Required: `AZURACAST_BASE_URL`, `AZURACAST_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
+
+Optional: `R2_ENDPOINT`, `DRY_RUN` (default `true`), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `STATION_IDS`, `MEDIA_TYPES`, `LIMIT_PER_STATION`, `CONCURRENCY` (default `4`).
+
+## Körsätt
+
+### A) Lokalt
+
+```bash
+cp .env.example .env.local      # fyll i värden
+./scripts/run-migration.sh           # dry-run
+./scripts/run-migration.sh --real    # skarp körning (med bekräftelse)
+```
+
+### B) GitHub Action (rekommenderat för skarp körning)
+
+Workflow: `.github/workflows/migrate-azuracast.yml` (`workflow_dispatch`).
+
+**Engångssetup** — lägg till repo-secrets under *Settings → Secrets and variables → Actions*:
+
 Required:
-- `AZURACAST_BASE_URL`   — e.g. `https://azuracast.example.com`
+- `AZURACAST_BASE_URL`
 - `AZURACAST_API_KEY`
 - `R2_ACCOUNT_ID`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 
 Optional:
-- `R2_ENDPOINT`              — defaults to `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
-- `DRY_RUN`                  — `true` (default) | `false`
-- `SUPABASE_URL`             — enable indexing into `storage_assets` if table exists
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `STATION_IDS`              — comma-separated AzuraCast station IDs to limit scope
-- `MEDIA_TYPES`              — subset of `media,ondemand,artwork,recordings`
-- `LIMIT_PER_STATION`        — cap items per type per station (smoke testing)
-- `CONCURRENCY`              — default `4`
+- `R2_ENDPOINT`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (om indexering aktiveras)
 
-Place these in a local `.env` (gitignored) or pass via shell.
+**Köra:** GitHub → *Actions* → *Migrate AzuraCast → R2* → *Run workflow*. Inputs:
 
-## Run
+| Input | Default | Beskrivning |
+| ----- | ------- | ----------- |
+| `dry_run` | `true` | Sätt `false` för skarp körning |
+| `station_ids` | `""` | Komma-separerade IDs, tomt = alla |
+| `media_types` | `media,ondemand,artwork,recordings` | Subset |
+| `limit_per_station` | `""` | Cap per typ per station |
+| `concurrency` | `4` | Parallella uppladdningar |
+| `enable_supabase_index` | `false` | Indexera till `storage_assets` |
 
-```bash
-# Dry run (default) — no R2 writes, full report
-bun run migrate:azuracast
-
-# Real migration
-DRY_RUN=false bun run migrate:azuracast
-
-# Filtered smoke
-STATION_IDS=1 MEDIA_TYPES=media LIMIT_PER_STATION=5 DRY_RUN=false bun run migrate:azuracast
-```
+Rapporten (`migration-report.json` + `.csv`) laddas upp som workflow-artifact (30 dagars retention).
 
 ## Output
 
-- `migration-report.json`
-- `migration-report.csv`
-
-Per-row status: `planned | copied | skipped | failed`. Existing R2 objects are never overwritten.
+Per-row status: `planned | copied | skipped | failed`. Befintliga R2-objekt skrivs aldrig över.
 
 ## Supabase indexing
 
-Optional. The script probes `storage_assets`. If it doesn't exist, indexing is silently disabled (no schema is created).
+Valfritt. Scriptet probar `storage_assets`. Saknas tabellen avaktiveras indexering tyst (inget schema skapas).
 
-Insert shape:
-```json
-{
-  "bucket": "...",
-  "key": "...",
-  "original_filename": "...",
-  "file_type": "audio/mpeg",
-  "source": "azuracast_migration",
-  "status": "available",
-  "metadata": { "station": "...", "azuracast_id": "...", "migrated_at": "..." }
-}
-```
+## Säkerhet
 
-## Security
-
-- CLI only — no browser bundle imports.
-- API keys / R2 credentials never logged in clear (masked to `****1234`).
-- No public R2 URLs are generated.
+- CLI-only, inga browser-imports.
+- Credentials maskas i loggar (`****1234`).
+- Inga publika R2-URLs genereras.
