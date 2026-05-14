@@ -1,0 +1,120 @@
+name: Migrate AzuraCast → R2
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (ingen R2-skrivning)"
+        type: boolean
+        default: true
+      station_ids:
+        description: "Komma-separerade station-IDs (tomt = alla)"
+        type: string
+        default: ""
+      media_types:
+        description: "Subset av media,ondemand,artwork,recordings"
+        type: string
+        default: "media,ondemand,artwork,recordings"
+      limit_per_station:
+        description: "Max antal items per typ per station (tomt = ingen gräns)"
+        type: string
+        default: ""
+      concurrency:
+        description: "Parallella uppladdningar"
+        type: string
+        default: "4"
+      enable_supabase_index:
+        description: "Indexera till storage_assets (kräver SUPABASE_* secrets)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: migrate-azuracast
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      # AzuraCast
+      AZURACAST_BASE_URL: ${{ secrets.AZURACAST_BASE_URL }}
+      AZURACAST_API_KEY: ${{ secrets.AZURACAST_API_KEY }}
+      # Cloudflare R2
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      # Migration
+      DRY_RUN: ${{ inputs.dry_run }}
+      STATION_IDS: ${{ inputs.station_ids }}
+      MEDIA_TYPES: ${{ inputs.media_types }}
+      LIMIT_PER_STATION: ${{ inputs.limit_per_station }}
+      CONCURRENCY: ${{ inputs.concurrency }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate required secrets
+        run: |
+          missing=()
+          for v in AZURACAST_BASE_URL AZURACAST_API_KEY R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            if [ -z "${!v}" ]; then missing+=("$v"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "✖ Saknar secrets: ${missing[*]}"
+            echo "Lägg till dem under repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "✓ Alla required secrets finns"
+          echo "DRY_RUN=$DRY_RUN"
+
+      - name: Inject Supabase secrets (optional)
+        if: ${{ inputs.enable_supabase_index }}
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
+            echo "✖ enable_supabase_index=true men SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY saknas som secrets"
+            exit 1
+          fi
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" >> "$GITHUB_ENV"
+
+      - name: Run migration
+        run: bun run migrate:azuracast
+
+      - name: Upload migration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-report-${{ github.run_id }}
+          path: |
+            migration-report.json
+            migration-report.csv
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Migration: AzuraCast → R2"
+            echo ""
+            echo "- DRY_RUN: \`$DRY_RUN\`"
+            echo "- STATION_IDS: \`${STATION_IDS:-(alla)}\`"
+            echo "- MEDIA_TYPES: \`${MEDIA_TYPES}\`"
+            echo "- LIMIT_PER_STATION: \`${LIMIT_PER_STATION:-(ingen)}\`"
+            echo "- CONCURRENCY: \`${CONCURRENCY}\`"
+            echo ""
+            echo "Rapport finns som artifact: \`migration-report-${{ github.run_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
