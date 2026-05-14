@@ -1,6 +1,20 @@
 import "dotenv/config";
 import { z } from "zod";
 
+// Coerce empty strings (common from GitHub Actions env injection) to undefined.
+const emptyToUndef = (v: unknown) =>
+  typeof v === "string" && v.trim() === "" ? undefined : v;
+
+const optionalUrl = z.preprocess(emptyToUndef, z.string().url().optional());
+const optionalStr = z.preprocess(emptyToUndef, z.string().min(1).optional());
+const optionalNum = z.preprocess(
+  emptyToUndef,
+  z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : undefined)),
+);
+
 const schema = z.object({
   AZURACAST_BASE_URL: z.string().url(),
   AZURACAST_API_KEY: z.string().min(1),
@@ -8,26 +22,26 @@ const schema = z.object({
   R2_ACCOUNT_ID: z.string().min(1),
   R2_ACCESS_KEY_ID: z.string().min(1),
   R2_SECRET_ACCESS_KEY: z.string().min(1),
-  R2_ENDPOINT: z.string().url().optional(),
+  R2_ENDPOINT: optionalUrl,
 
   DRY_RUN: z
     .string()
     .optional()
     .transform((v) => (v ?? "true").toLowerCase() !== "false"),
 
-  SUPABASE_URL: z.string().url().optional(),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+  SUPABASE_URL: optionalUrl,
+  SUPABASE_SERVICE_ROLE_KEY: optionalStr,
 
-  STATION_IDS: z.string().optional(),
-  MEDIA_TYPES: z.string().optional(),
-  LIMIT_PER_STATION: z
-    .string()
-    .optional()
-    .transform((v) => (v ? Number(v) : undefined)),
-  CONCURRENCY: z
-    .string()
-    .optional()
-    .transform((v) => (v ? Number(v) : 4)),
+  STATION_IDS: optionalStr,
+  MEDIA_TYPES: optionalStr,
+  LIMIT_PER_STATION: optionalNum,
+  CONCURRENCY: z.preprocess(
+    emptyToUndef,
+    z
+      .string()
+      .optional()
+      .transform((v) => (v ? Number(v) : 4)),
+  ),
 });
 
 export type MediaType = "media" | "ondemand" | "artwork" | "recordings";
