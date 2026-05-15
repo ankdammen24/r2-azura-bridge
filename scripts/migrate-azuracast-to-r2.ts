@@ -14,6 +14,8 @@ import { createR2Client, objectExists, uploadFromUrl } from "./lib/r2";
 import { Report, type ReportRow } from "./lib/report";
 import { SupabaseIndexer } from "./lib/supabase-index";
 
+const MAX_VERBOSE_429_LOGS = 40;
+
 async function main() {
   const env = loadEnv();
 
@@ -59,6 +61,11 @@ async function main() {
   for (const station of filtered) {
     console.log(`\n[station ${station.shortcode}] (${station.id}) ${station.name}`);
     const collected: AzMediaItem[] = [];
+    const stationStats = {
+      missingSourceUrl: 0,
+      rateLimited429: 0,
+      otherFailures: 0,
+    };
 
     if (env.mediaTypes.includes("media")) {
       const m = await az.listMedia(station.id);
@@ -91,8 +98,14 @@ async function main() {
 
     await Promise.all(
       collected.map((item) =>
-        limit(() => processItem(item, station.shortcode, env.dryRun, r2, indexer, report)),
+        limit(() =>
+          processItem(item, station.shortcode, env.dryRun, r2, indexer, report, stationStats),
+        ),
       ),
+    );
+
+    console.log(
+      `  station summary: missing_source_url=${stationStats.missingSourceUrl}, rate_limited_429=${stationStats.rateLimited429}, other_failures=${stationStats.otherFailures}`,
     );
   }
 
@@ -116,6 +129,11 @@ async function processItem(
   r2: ReturnType<typeof createR2Client>,
   indexer: SupabaseIndexer | undefined,
   report: Report,
+  stationStats: {
+    missingSourceUrl: number;
+    rateLimited429: number;
+    otherFailures: number;
+  },
 ) {
   const date = item.mtime ? new Date(item.mtime * 1000) : new Date();
   const target = mapTarget(item.type, stationShort, date);
@@ -136,13 +154,11 @@ async function processItem(
   };
 
   if (!item.download_url) {
-    console.warn(
-      `  [${stationShort}/${item.type}] ${item.original_filename} → no downloadable source found`,
-    );
+    stationStats.missingSourceUrl++;
     report.add({
       ...baseRow,
       status: "skipped",
-      error_message: "no downloadable source found",
+      error_message: "skipped: no downloadable source found",
     });
     return;
   }
@@ -186,7 +202,17 @@ async function processItem(
     }
   } catch (err) {
     const msg = (err as Error).message;
-    console.error(`  [FAIL][${stationShort}/${item.type}] ${item.original_filename} → ${msg}`);
+    if (msg.includes(" 429 ") || msg.includes("Too Many Requests")) {
+      stationStats.rateLimited429++;
+      if (stationStats.rateLimited429 <= MAX_VERBOSE_429_LOGS) {
+        console.error(`  [FAIL][${stationShort}/${item.type}] ${item.original_filename} → ${msg}`);
+      } else if (stationStats.rateLimited429 === MAX_VERBOSE_429_LOGS + 1) {
+        console.error(`  [${stationShort}] further 429 logs suppressed...`);
+      }
+    } else {
+      stationStats.otherFailures++;
+      console.error(`  [FAIL][${stationShort}/${item.type}] ${item.original_filename} → ${msg}`);
+    }
     report.add({ ...baseRow, status: "failed", error_message: msg });
   }
 }
