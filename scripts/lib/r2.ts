@@ -1,7 +1,4 @@
-import {
-  S3Client,
-  HeadObjectCommand,
-} from "@aws-sdk/client-s3";
+import { S3Client, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import mime from "mime-types";
 import type { AppEnv } from "./env";
@@ -39,6 +36,40 @@ export interface UploadResult {
   contentType: string;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(retryAfter: string | null): number | undefined {
+  if (!retryAfter) return undefined;
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const ts = Date.parse(retryAfter);
+  if (Number.isFinite(ts)) return Math.max(0, ts - Date.now());
+  return undefined;
+}
+
+async function fetchWithRetry(sourceUrl: string): Promise<Response> {
+  const maxAttempts = 6;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(sourceUrl);
+    if (res.ok) return res;
+
+    const retryableStatus = res.status === 429 || (res.status >= 500 && res.status <= 599);
+    if (!retryableStatus || attempt === maxAttempts) {
+      throw new Error(`source ${sourceUrl} → ${res.status} ${res.statusText}`);
+    }
+
+    const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+    const expBackoffMs = Math.min(30_000, 500 * 2 ** (attempt - 1));
+    const jitterMs = Math.floor(Math.random() * 250);
+    await sleep((retryAfterMs ?? expBackoffMs) + jitterMs);
+  }
+
+  throw new Error(`source ${sourceUrl} → exhausted retries`);
+}
+
 export async function uploadFromUrl(
   client: S3Client,
   bucket: string,
@@ -46,9 +77,9 @@ export async function uploadFromUrl(
   sourceUrl: string,
   filename: string,
 ): Promise<UploadResult> {
-  const res = await fetch(sourceUrl);
-  if (!res.ok || !res.body) {
-    throw new Error(`source ${sourceUrl} → ${res.status} ${res.statusText}`);
+  const res = await fetchWithRetry(sourceUrl);
+  if (!res.body) {
+    throw new Error(`source ${sourceUrl} → empty response body`);
   }
   const headerType = res.headers.get("content-type") ?? undefined;
   const guessed = mime.lookup(filename) || undefined;
