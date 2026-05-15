@@ -39,6 +39,7 @@ jobs:
     permissions:
       contents: read
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       # AzuraCast
       AZURACAST_BASE_URL: ${{ secrets.AZURACAST_BASE_URL }}
       AZURACAST_API_KEY: ${{ secrets.AZURACAST_API_KEY }}
@@ -56,7 +57,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -90,12 +96,38 @@ jobs:
           echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> "$GITHUB_ENV"
           echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" >> "$GITHUB_ENV"
 
+      - name: AzuraCast diagnostics (non-blocking)
+        run: |
+          host=$(echo "$AZURACAST_BASE_URL" | sed -E 's#^https?://([^/:]+).*#\1#')
+          echo "AzuraCast host: $host"
+          echo "DRY_RUN=$DRY_RUN"
+          echo "MEDIA_TYPES=$MEDIA_TYPES"
+          echo "STATION_IDS=${STATION_IDS:-(all)}"
+          echo "CONCURRENCY=$CONCURRENCY"
+          echo "AZURACAST_BASE_URL=$AZURACAST_BASE_URL"
+          echo "R2_ENDPOINT=${R2_ENDPOINT:-"(derived from R2_ACCOUNT_ID)"}"
+
+          if getent hosts "$host" >/dev/null; then
+            echo "✓ DNS lookup ok for $host"
+          else
+            echo "::warning::DNS lookup failed for $host from this GitHub-hosted runner."
+          fi
+
+          if curl -fsS --connect-timeout 15 --max-time 30 \
+            -H "X-API-Key: $AZURACAST_API_KEY" \
+            -H "Accept: application/json" \
+            "$AZURACAST_BASE_URL/api/stations" >/dev/null; then
+            echo "✓ API probe ok for $AZURACAST_BASE_URL/api/stations"
+          else
+            echo "::warning::API probe failed for $AZURACAST_BASE_URL/api/stations (continuing; migration step will decide final status)."
+          fi
+
       - name: Run migration
         run: bun run migrate:azuracast
 
       - name: Upload migration report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: migration-report-${{ github.run_id }}
           path: |
