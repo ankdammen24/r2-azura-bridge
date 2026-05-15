@@ -15,15 +15,6 @@ import { Report, type ReportRow } from "./lib/report";
 import { SupabaseIndexer } from "./lib/supabase-index";
 
 const MAX_VERBOSE_429_LOGS = 40;
-const NON_MUSIC_PATTERNS = [
-  /\bfx\b/i,
-  /\bsfx\b/i,
-  /\bjingle(s)?\b/i,
-  /\btoh\b/i,
-  /\bvoice[_ -]?track(s)?\b/i,
-  /\bsweeper(s)?\b/i,
-  /\bliner(s)?\b/i,
-];
 
 async function main() {
   const env = loadEnv();
@@ -72,7 +63,6 @@ async function main() {
     const collected: AzMediaItem[] = [];
     const stationStats = {
       missingSourceUrl: 0,
-      nonMusicSkipped: 0,
       rateLimited429: 0,
       otherFailures: 0,
     };
@@ -115,7 +105,7 @@ async function main() {
     );
 
     console.log(
-      `  station summary: missing_source_url=${stationStats.missingSourceUrl}, non_music_skipped=${stationStats.nonMusicSkipped}, rate_limited_429=${stationStats.rateLimited429}, other_failures=${stationStats.otherFailures}`,
+      `  station summary: missing_source_url=${stationStats.missingSourceUrl}, rate_limited_429=${stationStats.rateLimited429}, other_failures=${stationStats.otherFailures}`,
     );
   }
 
@@ -141,7 +131,6 @@ async function processItem(
   report: Report,
   stationStats: {
     missingSourceUrl: number;
-    nonMusicSkipped: number;
     rateLimited429: number;
     otherFailures: number;
   },
@@ -170,16 +159,6 @@ async function processItem(
       ...baseRow,
       status: "skipped",
       error_message: "skipped: no downloadable source found",
-    });
-    return;
-  }
-
-  if (item.type === "media" && !isMusicCandidate(item)) {
-    stationStats.nonMusicSkipped++;
-    report.add({
-      ...baseRow,
-      status: "skipped",
-      error_message: "skipped: non-music media",
     });
     return;
   }
