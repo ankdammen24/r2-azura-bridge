@@ -22,12 +22,28 @@ export class AzuraCastClient {
 
   private async req<T>(path: string): Promise<T> {
     const url = `${this.env.baseUrl}${path}`;
-    const res = await fetch(url, {
-      headers: {
-        "X-API-Key": this.env.apiKey,
-        Accept: "application/json",
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: {
+          "X-API-Key": this.env.apiKey,
+          Accept: "application/json",
+        },
+      });
+    } catch (err) {
+      const cause = err instanceof Error ? err.cause : undefined;
+      const causeMsg =
+        cause && typeof cause === "object"
+          ? [
+              (cause as { code?: string }).code,
+              (cause as { syscall?: string }).syscall,
+              (cause as { hostname?: string }).hostname,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          : "";
+      throw new Error(`AzuraCast request failed for ${url}${causeMsg ? ` (${causeMsg})` : ""}`);
+    }
     if (!res.ok) {
       throw new Error(`AzuraCast ${path} → ${res.status} ${res.statusText}`);
     }
@@ -44,17 +60,12 @@ export class AzuraCastClient {
   }
 
   async listMedia(stationId: number): Promise<AzMediaItem[]> {
-    const items = await this.req<any[]>(
-      `/api/station/${stationId}/files`,
-    ).catch(() => [] as any[]);
+    const items = await this.req<any[]>(`/api/station/${stationId}/files`).catch(() => [] as any[]);
     const out: AzMediaItem[] = [];
     for (const it of items) {
-      const downloadUrl: string | undefined =
-        it.links?.download ?? it.download_url ?? undefined;
+      const downloadUrl: string | undefined = it.links?.download ?? it.download_url ?? undefined;
       const filename: string =
-        it.path?.split("/").pop() ??
-        it.original_name ??
-        `track-${it.id ?? it.unique_id}`;
+        it.path?.split("/").pop() ?? it.original_name ?? `track-${it.id ?? it.unique_id}`;
       out.push({
         type: "media",
         id: it.id ?? it.unique_id ?? filename,
@@ -70,12 +81,11 @@ export class AzuraCastClient {
   }
 
   async listOnDemand(stationId: number): Promise<AzMediaItem[]> {
-    const items = await this.req<any[]>(
-      `/api/station/${stationId}/ondemand`,
-    ).catch(() => [] as any[]);
+    const items = await this.req<any[]>(`/api/station/${stationId}/ondemand`).catch(
+      () => [] as any[],
+    );
     return items.map((it) => {
-      const downloadUrl: string | undefined =
-        it.download_url ?? it.links?.download ?? undefined;
+      const downloadUrl: string | undefined = it.download_url ?? it.links?.download ?? undefined;
       const filename: string =
         it.media?.path?.split("/").pop() ??
         it.media?.original_name ??
@@ -123,9 +133,7 @@ export class AzuraCastClient {
         if (!Array.isArray(items)) continue;
         return items.map((it) => {
           const downloadUrl: string | undefined =
-            it.recording?.links?.download ??
-            it.links?.download ??
-            it.download_url;
+            it.recording?.links?.download ?? it.links?.download ?? it.download_url;
           const filename: string =
             it.recording?.path?.split("/").pop() ??
             it.path?.split("/").pop() ??
