@@ -217,6 +217,21 @@ async function processItem(
   }
 }
 
+function isMusicCandidate(item: AzMediaItem): boolean {
+  const filename = item.original_filename.toLowerCase();
+  const rawPath =
+    item.raw && typeof item.raw === "object" && "path" in item.raw
+      ? String((item.raw as { path?: unknown }).path ?? "")
+      : "";
+  const path = rawPath.toLowerCase();
+  const text = `${path} ${filename}`;
+
+  for (const pattern of NON_MUSIC_PATTERNS) {
+    if (pattern.test(text)) return false;
+  }
+  return true;
+}
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);
