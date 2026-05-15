@@ -14,11 +14,7 @@ export interface TargetLocation {
   prefix: string; // includes trailing slash
 }
 
-export function mapTarget(
-  type: MediaType,
-  stationShortName: string,
-  date: Date,
-): TargetLocation {
+export function mapTarget(type: MediaType, stationShortName: string, date: Date): TargetLocation {
   const yyyy = date.getUTCFullYear();
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
@@ -28,8 +24,8 @@ export function mapTarget(
   switch (type) {
     case "media":
       return {
-        bucket: BUCKETS.media,
-        prefix: `azuracast/${station}/media/${dayPath}/`,
+        bucket: BUCKETS.import,
+        prefix: "incoming/",
       };
     case "ondemand":
       return {
@@ -52,9 +48,7 @@ export function mapTarget(
 export function safeFilename(name: string): string {
   const trimmed = name.trim().replace(/[\\/]+/g, "_");
   // keep alnum, dash, dot, underscore; replace whitespace with -
-  const cleaned = trimmed
-    .replace(/\s+/g, "-")
-    .replace(/[^A-Za-z0-9._-]/g, "");
+  const cleaned = trimmed.replace(/\s+/g, "-").replace(/[^A-Za-z0-9._-]/g, "");
   return cleaned || `file-${Date.now()}`;
 }
 
