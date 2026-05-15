@@ -10,11 +10,7 @@ import pLimit from "p-limit";
 import { loadEnv, mask, type MediaType } from "./lib/env";
 import { AzuraCastClient, type AzMediaItem } from "./lib/azuracast";
 import { mapTarget, safeFilename } from "./lib/mapping";
-import {
-  createR2Client,
-  objectExists,
-  uploadFromUrl,
-} from "./lib/r2";
+import { createR2Client, objectExists, uploadFromUrl } from "./lib/r2";
 import { Report, type ReportRow } from "./lib/report";
 import { SupabaseIndexer } from "./lib/supabase-index";
 
@@ -40,7 +36,20 @@ async function main() {
 
   const limit = pLimit(env.concurrency);
 
-  const stations = await az.listStations();
+  let stations = [] as Awaited<ReturnType<typeof az.listStations>>;
+  try {
+    stations = await az.listStations();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (env.dryRun) {
+      console.warn(`\n[WARN] Could not reach AzuraCast in dry-run mode: ${msg}`);
+      await report.write("migration-report.json", "migration-report.csv");
+      console.log("Wrote empty migration report because source was unreachable in dry-run mode.");
+      return;
+    }
+    throw err;
+  }
+
   const filtered = env.stationIds
     ? stations.filter((s) => env.stationIds!.includes(String(s.id)))
     : stations;
@@ -82,9 +91,7 @@ async function main() {
 
     await Promise.all(
       collected.map((item) =>
-        limit(() =>
-          processItem(item, station.shortcode, env.dryRun, r2, indexer, report),
-        ),
+        limit(() => processItem(item, station.shortcode, env.dryRun, r2, indexer, report)),
       ),
     );
   }
@@ -156,13 +163,7 @@ async function processItem(
       report.add({ ...baseRow, status: "skipped", error_message: "exists" });
       return;
     }
-    const result = await uploadFromUrl(
-      r2,
-      target.bucket,
-      key,
-      item.download_url,
-      filename,
-    );
+    const result = await uploadFromUrl(r2, target.bucket, key, item.download_url, filename);
     console.log(
       `  [OK]  [${stationShort}/${item.type}] ${item.original_filename} → ${target.bucket}/${key} (${result.size} bytes)`,
     );
@@ -185,9 +186,7 @@ async function processItem(
     }
   } catch (err) {
     const msg = (err as Error).message;
-    console.error(
-      `  [FAIL][${stationShort}/${item.type}] ${item.original_filename} → ${msg}`,
-    );
+    console.error(`  [FAIL][${stationShort}/${item.type}] ${item.original_filename} → ${msg}`);
     report.add({ ...baseRow, status: "failed", error_message: msg });
   }
 }
